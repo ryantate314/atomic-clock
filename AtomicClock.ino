@@ -3,48 +3,39 @@
 #include "NtpClient.h"
 #include <ESPmDNS.h>
 #include <cmath>
+#include "RTClib.h"
 
-const int lcdColumns = 16;
-const int lcdRows = 2;
-const int lcdAddress = 0x27;
+RTC_DS3231 rtc;
+
+
 
 LiquidCrystal_I2C lcd(lcdAddress, lcdColumns, lcdRows);
 
 const char *ssid = "The Promised LAN";
 const char *password = "BlueLizard6535";
 
-NtpClient client;
+NtpClient ntpClient;
 
-int gps_offset = 0;
+const uint32_t gps_sync_threshhold_us = 500;
+const int16_t gps_sync_calibration = -94;
 const long five_hundred_ms = 0.5 * 1e6;
 const long one_second = 1e6;
-bool updated_from_gps = false;
+volatile uint64_t last_gps_pulse = 0;
 
 void IRAM_ATTR isr() {
+  last_gps_pulse = esp_timer_get_time();
+}
+
+timeval update_ntp() {
+  uint64_t time = ntpClient.update();
+  Serial.print("Received time: ");
+  Serial.println(time);
   struct timeval tv;
-  gettimeofday(&tv, NULL);
-
-  if (tv.tv_usec > five_hundred_ms) {
-    // Assume slow
-    gps_offset = tv.tv_usec - one_second;
-  }
-  else {
-    // Assum fast
-    gps_offset = tv.tv_usec;
-  }
-
-  if (abs(gps_offset) > 500) {
-    updated_from_gps = true;
-    if (gps_offset < 0) {
-      tv.tv_usec = 0;
-      tv.tv_sec++;
-    }
-    else {
-      tv.tv_usec = 0;
-    }
-    settimeofday(&tv, NULL);
-  }
-
+  tv.tv_sec = time / 1000;
+  tv.tv_usec = (time % 1000) * 1000;
+  settimeofday(&tv, NULL);
+  lcd.clear();
+  return tv;
 }
 
 
@@ -55,7 +46,7 @@ void setup() {
   lcd.setCursor(0, 0);
   lcd.print("Booting up...");
 
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   //Connect to the WiFi network
   WiFi.begin(ssid, password);
@@ -69,29 +60,67 @@ void setup() {
   delay(1000);
 
   char* ip = "129.6.15.28";
+  ntpClient.init(ip);
 
-  client.init(ip);
+  rtc.begin();
+  if (rtc.lostPower()) {
+    Serial.println("RTC Lost Power");
+    int64_t time = ntpClient.update();
+    rtc.adjust(DateTime(time / 1000));
+    Serial.print("Updated RTC with current time: ");
+    Serial.println(time / 1000);
+  }
 
-  uint64_t time = client.update();
-  Serial.print("Received time: ");
-  Serial.println(time);
+  DateTime rtcTime = rtc.now();
+  Serial.print("RTC Time: ");
+  Serial.println(rtcTime.unixtime());
   struct timeval tv;
-  tv.tv_sec = time / 1000;
-  tv.tv_usec = (time % 1000) * 1000;
+  tv.tv_sec = rtcTime.unixtime();
+  tv.tv_usec = 0;
   settimeofday(&tv, NULL);
-  lcd.clear();
 
-  pinMode(12, INPUT);
-  attachInterrupt(12, isr, RISING);
+  pinMode(5, INPUT);
+  attachInterrupt(5, isr, FALLING);
+}
+
+int get_gps_offset_us(timeval *tv) {
+  if (last_gps_pulse == 0)
+    return 0;
+  uint64_t us_since_pulse = esp_timer_get_time() - last_gps_pulse;
+  if (us_since_pulse > one_second * 10) {
+    Serial.println("Too long since last pulse");
+    last_gps_pulse = 0;
+    return 0;
+  }
+  int diff = (us_since_pulse % one_second) - tv->tv_usec;
+
+  return diff;
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  lcd.setCursor(0, 0);
   struct tm timeInfo;
   getLocalTime(&timeInfo);
   struct timeval tv;
   gettimeofday(&tv, NULL);
+
+  // Check GPS time
+  int gps_offset = get_gps_offset_us(&tv);
+  if (gps_offset != 0) {
+    // Serial.print("GPS offset: ");
+    // Serial.print(gps_offset);
+    // Serial.println("us");
+    if (abs(gps_offset) > gps_sync_threshhold_us) {
+      tv.tv_usec = tv.tv_usec + gps_offset + gps_sync_calibration;
+      settimeofday(&tv, NULL);
+      Serial.print("Updated time of day from GPS by ");
+      Serial.print(gps_offset);
+      Serial.println("us");
+    }
+  }
+ 
+
+
+  lcd.setCursor(0, 0);
   char timeStringBuff[64];
   strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M:%S", &timeInfo);
   // Serial.print("Current time: ");
@@ -106,10 +135,10 @@ void loop() {
   // Serial.print("GPS offset: ");
   // Serial.println(gps_offset);
 
-  if (updated_from_gps) {
-    Serial.println("Updated GPS time");
-    updated_from_gps = false;
-  }
+  // if (updated_from_gps) {
+  //   Serial.println("Updated GPS time");
+  //   updated_from_gps = false;
+  // }
 
   delay(100);
 }
