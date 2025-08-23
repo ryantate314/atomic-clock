@@ -1,4 +1,4 @@
-#include <LiquidCrystal_I2C.h>
+#include "Screen.h"
 #include <WiFi.h>
 #include "NtpClient.h"
 #include <ESPmDNS.h>
@@ -7,9 +7,7 @@
 
 RTC_DS3231 rtc;
 
-
-
-LiquidCrystal_I2C lcd(lcdAddress, lcdColumns, lcdRows);
+Screen screen;
 
 const char *ssid = "The Promised LAN";
 const char *password = "BlueLizard6535";
@@ -34,17 +32,14 @@ timeval update_ntp() {
   tv.tv_sec = time / 1000;
   tv.tv_usec = (time % 1000) * 1000;
   settimeofday(&tv, NULL);
-  lcd.clear();
   return tv;
 }
 
 
 void setup() {
   // put your setup code here, to run once:
-  lcd.init();
-  lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Booting up...");
+  screen.init();
+  screen.showMessage("Booting up", 0);
 
   Serial.begin(115200);
 
@@ -54,10 +49,7 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
   }
-
-  lcd.setCursor(0, 1);
-  lcd.print(WiFi.localIP().toString());
-  delay(1000);
+  screen.showMessage("WiFi Connected", 500);
 
   char* ip = "129.6.15.28";
   ntpClient.init(ip);
@@ -69,6 +61,10 @@ void setup() {
     rtc.adjust(DateTime(time / 1000));
     Serial.print("Updated RTC with current time: ");
     Serial.println(time / 1000);
+    screen.showMessage("Time frm NTP");
+  }
+  else {
+    screen.showMessage("Time frm RTC");
   }
 
   DateTime rtcTime = rtc.now();
@@ -93,52 +89,31 @@ int get_gps_offset_us(timeval *tv) {
     return 0;
   }
   int diff = (us_since_pulse % one_second) - tv->tv_usec;
+  if (diff > 5e5)
+    diff = diff - one_second;
 
   return diff;
 }
 
 void loop() {
-  struct tm timeInfo;
-  getLocalTime(&timeInfo);
   struct timeval tv;
   gettimeofday(&tv, NULL);
+  screen.setTime(tv);
 
   // Check GPS time
   int gps_offset = get_gps_offset_us(&tv);
   if (gps_offset != 0) {
-    // Serial.print("GPS offset: ");
-    // Serial.print(gps_offset);
-    // Serial.println("us");
     if (abs(gps_offset) > gps_sync_threshhold_us) {
       tv.tv_usec = tv.tv_usec + gps_offset + gps_sync_calibration;
       settimeofday(&tv, NULL);
       Serial.print("Updated time of day from GPS by ");
       Serial.print(gps_offset);
       Serial.println("us");
+      screen.showMessage("Updt From GPS", 2000);
     }
   }
  
-
-
-  lcd.setCursor(0, 0);
-  char timeStringBuff[64];
-  strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M:%S", &timeInfo);
-  // Serial.print("Current time: ");
-  // Serial.println(timeStringBuff);
-  lcd.print(timeStringBuff);
-  lcd.setCursor(8, 0);
-  lcd.print('.');
-  lcd.setCursor(9, 0);
-  uint16_t ms = tv.tv_usec / 1e3;
-  lcd.print(ms);
-
-  // Serial.print("GPS offset: ");
-  // Serial.println(gps_offset);
-
-  // if (updated_from_gps) {
-  //   Serial.println("Updated GPS time");
-  //   updated_from_gps = false;
-  // }
+  screen.tick();
 
   delay(100);
 }
