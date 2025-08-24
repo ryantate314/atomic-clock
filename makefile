@@ -1,20 +1,12 @@
 CXX = g++
 CXXFLAGS = -std=c++11 -Wall
-SRC = test.cpp
-OBJ = $(SRC:.cpp=.o)
-TARGET = test
 
-# Add other source files if needed, e.g., NativeUDP.cpp
-# SRC = test.cpp NativeUDP.cpp
+ARCH := 'esp32:esp32:esp32'
+PORT := '/dev/ttyUSB0'
 
-all: $(TARGET)
+arduino-compile:
+	arduino-cli compile --fqbn $(ARCH) .
 
-$(TARGET): $(SRC)
-    $(CXX) $(CXXFLAGS) -o $(TARGET) $(SRC)
-:Wall
+upload:
+	arduino-cli upload -p $(PORT) --fqbn $(ARCH) .
 
-run: $(TARGET)
-    ./$(TARGET)
-
-clean:
-    rm -f $(TARGET) $(OBJ)
