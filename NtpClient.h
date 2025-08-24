@@ -100,7 +100,6 @@ class NtpClient {
 
   public:
     void init(const char* ip) {
-      // udp.begin(WiFi.localIP(), port);
       udp.begin(ip, 123);
     }
 

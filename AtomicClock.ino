@@ -4,6 +4,11 @@
 #include <ESPmDNS.h>
 #include <cmath>
 #include "RTClib.h"
+#include "time_helpers.h"
+
+const int BUTTON_PIN = 4;
+const int RTC_SQW_PIN = 19;
+const int GPS_PPS_PIN = 5;
 
 RTC_DS3231 rtc;
 
@@ -19,22 +24,22 @@ const int16_t gps_sync_calibration = -94;
 const long five_hundred_ms = 0.5 * 1e6;
 const long one_second = 1e6;
 volatile uint64_t last_gps_pulse = 0;
+volatile uint64_t last_rtc_pulse = 0;
 
-void IRAM_ATTR isr() {
+void IRAM_ATTR gps_pps_isr() {
   last_gps_pulse = esp_timer_get_time();
 }
 
-timeval update_ntp() {
+void IRAM_ATTR rtc_sqw_isr() {
+  last_rtc_pulse = esp_timer_get_time();
+}
+
+uint64_t update_ntp() {
   uint64_t time = ntpClient.update();
   Serial.print("Received time: ");
   Serial.println(time);
-  struct timeval tv;
-  tv.tv_sec = time / 1000;
-  tv.tv_usec = (time % 1000) * 1000;
-  settimeofday(&tv, NULL);
-  return tv;
+  return time;
 }
-
 
 void setup() {
   // put your setup code here, to run once:
@@ -57,10 +62,9 @@ void setup() {
   rtc.begin();
   if (rtc.lostPower()) {
     Serial.println("RTC Lost Power");
-    int64_t time = ntpClient.update();
+    int64_t time = update_ntp();
     rtc.adjust(DateTime(time / 1000));
-    Serial.print("Updated RTC with current time: ");
-    Serial.println(time / 1000);
+    Serial.print("Updated RTC with current time");
     screen.showMessage("Time frm NTP");
   }
   else {
@@ -75,8 +79,13 @@ void setup() {
   tv.tv_usec = 0;
   settimeofday(&tv, NULL);
 
-  pinMode(5, INPUT);
-  attachInterrupt(5, isr, FALLING);
+  pinMode(GPS_PPS_PIN, INPUT);
+  attachInterrupt(GPS_PPS_PIN, gps_pps_isr, FALLING);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  
+  pinMode(RTC_SQW_PIN, INPUT_PULLUP);
+  attachInterrupt(RTC_SQW_PIN, rtc_sqw_isr, RISING);
 }
 
 int get_gps_offset_us(timeval *tv) {
@@ -95,10 +104,29 @@ int get_gps_offset_us(timeval *tv) {
   return diff;
 }
 
+void show_ntp_offset() {
+  if (WiFi.status() == WL_CONNECTED) {
+    screen.showMessage("Getting NTP");
+    uint64_t ntp = update_ntp();
+    uint64_t now = now_unix_ms();
+    char buffer[16];
+    snprint_diff(buffer, sizeof(buffer), ntp, now);
+    screen.showMessage(buffer);
+  }
+  else {
+    screen.showMessage("WiFi Not Connected");
+  }
+}
+
 void loop() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
   screen.setTime(tv);
+
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    Serial.println("Button pressed!");
+    // show_ntp_offset();
+  }
 
   // Check GPS time
   int gps_offset = get_gps_offset_us(&tv);
